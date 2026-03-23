@@ -2,85 +2,161 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from pyexpat.errors import messages
-from pathlib import Path
 
 load_dotenv(override=True)
 
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL")
 MODEL = os.getenv("MODEL_ID")
-WORKDIR=os.getcwd()
+WORKDIR = Path.cwd()
 
-SYSTEM_PROMPT = f"You are a coding agent at {WORKDIR}. Use bash to solve tasks. Act, don't explain."
+SYSTEM_PROMPT = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, don't explain."
 
-TOOLS = [{
-    "type": "function",
-    "function": {
-        "name": "bash",
-        "description": "Run a shell command.",
-        "parameters": {
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a shell command.",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
         },
     },
-}]
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read file contents.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Replace exact text in a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_text": {"type": "string"},
+                    "new_text": {"type": "string"},
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+]
+
 
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"path escapes workspace: {path}")
+        raise ValueError(f"Path escapes workspace: {p}")
     return path
 
-def run_read(path: str, limit: int = None) -> str:
+
+def run_bash(command: str) -> str:
+    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
+    if any(d in command for d in dangerous):
+        return "Error: Dangerous command blocked"
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=WORKDIR,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return output[:50000] if output else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "Error: Timeout (120s)"
+
+
+def run_read(path: str, limit: int | None = None) -> str:
     try:
         text = safe_path(path).read_text()
         lines = text.splitlines()
-        if limit and limit <len(lines):
-            lines = lines[:limit] + [f"...{len(lines) - limit} more lines"]
+        if limit and limit < len(lines):
+            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)[:50000]
     except Exception as e:
         return f"Error: {e}"
-        
+
+
 def run_write(path: str, content: str) -> str:
     try:
-        fp = safe_path(path)
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
+        file_path = safe_path(path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error: {e}"
-    
+
+
 def run_edit(path: str, old_text: str, new_text: str) -> str:
     try:
-        fp = safe_path(path)
-        text = fp.read_text()
-        if old_text not in text:
-            return f"Error: old_text not found in {path}"
-        fp.write_text(content.replace(old_text, new_text,1))
+        file_path = safe_path(path)
+        content = file_path.read_text()
+        if old_text not in content:
+            return f"Error: Text not found in {path}"
+        file_path.write_text(content.replace(old_text, new_text, 1))
         return f"Edited {path}"
     except Exception as e:
         return f"Error: {e}"
 
 
-def call_open_api(messages: list, tools: list = None):
+TOOL_HANDLERS = {
+    "bash": lambda **kw: run_bash(kw["command"]),
+    "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
+    "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
+    "edit_file": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
+}
+
+
+def call_open_api(messages: list, tools: list | None = None):
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
-
     payload = {
         "model": MODEL,
         "messages": messages,
-        "mas_token": 8000,
+        "max_tokens": 8000,
         "temperature": 0.5,
         "stream": False,
     }
-
     if tools:
         payload["tools"] = tools
 
@@ -99,64 +175,53 @@ def call_open_api(messages: list, tools: list = None):
             print(f"[DEBUG] Response body: {e.response.text}")
         raise Exception(f"API call failed: {e}")
 
-def run_bash(command: str) -> str:
-    dangerous = ["rm -rf /", "sudo", "shutdown","reboot", "> /dev/"]
-    if any(d in command for d in dangerous):
-        return "Error: Dangerous command blocked"
-    try:
-        r = subprocess.run(command,shell=True,cwd=os.getcwd(),
-                           capture_output=True,text=True,timeout=120)
-        out = (r.stdout + r.stderr).strip()
-        return out[:50000] if out else "no output"
-    except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-    
-
 
 def agent_loop(messages: list):
     while True:
-        response_data= call_open_api(messages, TOOLS)
+        response_data = call_open_api(messages, TOOLS)
         choice = response_data["choices"][0]
         message = choice["message"]
 
-        assistant_message = {"role": "assistant", "content": message.get("content","")}
-
+        assistant_message = {
+            "role": "assistant",
+            "content": message.get("content", ""),
+        }
         if "tool_calls" in message:
             assistant_message["tool_calls"] = message["tool_calls"]
 
         messages.append(assistant_message)
 
-        if choice['finish_reason'] != "tool_calls":
+        if choice["finish_reason"] != "tool_calls":
             return
 
         results = []
         for tool_call in message.get("tool_calls", []):
             function_name = tool_call["function"]["name"]
-            if function_name == "bash":
-                arguments = json.loads(tool_call["function"]["arguments"])
-                command = arguments["command"]
-                print(f"\033[33m{command}\033[0m")
-                output = run_bash(command)
-                print(output[:200])
-                results.append({
+            arguments = json.loads(tool_call["function"]["arguments"])
+            handler = TOOL_HANDLERS.get(function_name)
+            output = handler(**arguments) if handler else f"Unknown tool: {function_name}"
+            print(f"\033[33m> {function_name}: {output[:200]}\033[0m")
+            results.append(
+                {
                     "tool_call_id": tool_call["id"],
                     "role": "tool",
-                    "content": output
-                })
+                    "content": output,
+                }
+            )
 
         if results:
             messages.extend(results)
-
 
 
 if __name__ == "__main__":
     history = []
     while True:
         try:
-            query = input("\033[36ms01 >> \033[0m")
+            query = input("\033[36ms02 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
-        if query.strip().lower() in ("q","exit",""):
+
+        if query.strip().lower() in ("q", "exit", ""):
             break
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -165,12 +230,10 @@ if __name__ == "__main__":
 
         agent_loop(messages)
 
-        last_message = messages[-1]
-        if last_message["role"] == "assistant" and last_message.get("content"):
-            print(last_message["content"])
+        for message in reversed(messages):
+            if message["role"] == "assistant" and message.get("content"):
+                print(message["content"])
+                break
 
-        history = [msg for msg in messages if msg["role"] != "system"]
+        history = [message for message in messages if message["role"] != "system"]
         print()
-
-
-
