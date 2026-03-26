@@ -75,6 +75,15 @@ def run_bash(command: str) -> str:
 
 def agent_loop(messages: list):
     while True:
+        # chat completions 返回结构示例：
+        # {
+        #   "choices": [
+        #     {
+        #       "message": {...},
+        #       "finish_reason": "tool_calls" | "stop" | ...
+        #     }
+        #   ]
+        # }
         response_data= call_open_api(messages, TOOLS)
         choice = response_data["choices"][0]
         message = choice["message"]

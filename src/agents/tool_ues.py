@@ -192,6 +192,15 @@ def call_open_api(messages: list, tools: list | None = None):
 def agent_loop(messages: list):
     # 只要模型还在请求工具，就持续循环：调用模型 -> 执行工具 -> 回填结果。
     while True:
+        # chat completions 返回结构示例：
+        # {
+        #   "choices": [
+        #     {
+        #       "message": {...},
+        #       "finish_reason": "tool_calls" | "stop" | ...
+        #     }
+        #   ]
+        # }
         response_data = call_open_api(messages, TOOLS)
         choice = response_data["choices"][0]
         message = choice["message"]

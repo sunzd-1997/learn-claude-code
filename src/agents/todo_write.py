@@ -267,6 +267,15 @@ def agent_loop(messages: list):
     # 连续若干轮不更新 todo，就主动提醒模型重新同步自己的执行计划。
     rounds_since_todo = 0
     while True:
+        # chat completions 返回结构示例：
+        # {
+        #   "choices": [
+        #     {
+        #       "message": {...},
+        #       "finish_reason": "tool_calls" | "stop" | ...
+        #     }
+        #   ]
+        # }
         response_data = call_open_api(messages, TOOLS)
         choice = response_data["choices"][0]
         message = choice["message"]
