@@ -284,19 +284,12 @@ def agent_loop(messages: list):
             function_name = tool_call["function"]["name"]
             arguments = json.loads(tool_call["function"]["arguments"])
             try:
-                if function_name == "task":
-                    description = arguments.get("description", "subtask")
-                    prompt = arguments["prompt"]
-                    print(f"\033[33m> task ({description}): {prompt[:200]}\033[0m")
-                    output = run_subagent(prompt)
-                else:
-                    handler = TOOL_HANDLERS.get(function_name)
-                    output = handler(**arguments) if handler else f"Unknown tool: {function_name}"
+                handler = TOOL_HANDLERS.get(function_name)
+                output = handler(**arguments) if handler else f"Unknown tool: {function_name}"
             except Exception as e:
                 output = f"Error: {e}"
 
-            if function_name != "task":
-                print(f"\033[33m> {function_name}: {output[:200]}\033[0m")
+            print(f"\033[33m> {function_name}: {output[:200]}\033[0m")
 
             results.append(
                 {
