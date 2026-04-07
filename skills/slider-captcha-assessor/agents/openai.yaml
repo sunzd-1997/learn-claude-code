@@ -1,0 +1,5 @@
+interface:
+  display_name: "Slider CAPTCHA Assessor"
+  short_description: "Evaluate internal slider CAPTCHA robustness"
+  default_prompt: "使用 $slider-captcha-assessor 设计或评审一套针对自有滑块验证码的内部鲁棒性评测方案。"
+
